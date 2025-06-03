@@ -1,0 +1,126 @@
+Topograph:
+  attention_net_architecture:
+    activation: gelu
+    batch_norm: false
+    dropout: 0
+    regularization: 0
+    units: &id002
+    - 32
+    - 32
+  edge_net_architecture:
+    activation: gelu
+    batch_norm: false
+    dropout: 0
+    regularization: 0
+    units: &id001
+    - 256
+    - 256
+    - 64
+  full_connections_jets: true
+  full_connections_tops: true
+  n_iterations: 2
+  node_net_architecture:
+    activation: gelu
+    batch_norm: false
+    dropout: 0
+    regularization: 0
+    units: *id001
+  pooling: att
+  top_top_interaction: false
+all: true
+attention_units:
+  units: *id002
+batch_size: 256
+classification_loss:
+  weighted: true
+config_file: !!python/object/apply:pathlib.PosixPath
+- configs
+- config_partial.yaml
+edge_classification:
+  activation: gelu
+  batch_norm: false
+  dropout: 0
+  regularization: 0
+  units:
+  - 128
+  - 128
+  - 128
+graph_dense_net_units:
+  units: *id001
+initial_graph_block:
+  attention_network:
+    activation: gelu
+    batch_norm: false
+    dropout: 0
+    regularization: 0
+    units: *id002
+  dense_config_edges:
+    activation: gelu
+    batch_norm: false
+    dropout: 0
+    regularization: 0
+    units: *id001
+  dense_config_nodes:
+    activation: gelu
+    batch_norm: false
+    dropout: 0
+    regularization: 0
+    units: *id001
+  k_neighbours: 15
+  n_iterations: 2
+  pooling_edges: att
+initialization_top:
+  attention_net_architecture:
+    activation: gelu
+    batch_norm: false
+    dropout: 0
+    regularization: 0
+    units: *id002
+  jets_pooling: att
+  regression_net:
+    activation: gelu
+    batch_norm: false
+    dropout: 0
+    out: 3
+    regularization: 0
+    units: &id003
+    - 64
+    - 64
+jet_resolution: false
+jet_scale: false
+log_dir: !!python/object/apply:pathlib.PosixPath
+- Outputs
+lr_schedule:
+  config:
+    first_decay_steps: 1
+    initial_learning_rate: 0.001
+    m_mul: 1
+    t_mul: 1
+  name: cosine
+matchability: false
+n_epochs: 100
+n_events: null
+network_without_units:
+  activation: gelu
+  batch_norm: false
+  dropout: 0
+  regularization: 0
+persistent_edges: true
+predict: false
+regression_loss: mae
+regression_net:
+  activation: gelu
+  batch_norm: false
+  dropout: 0
+  out: 3
+  regularization: 0
+  units: *id003
+regression_units:
+  units: *id003
+same_scaler_everything: false
+test: false
+test_file: b_test.h5
+train_file: b_train.h5
+use_flavour_tagging: true
+val_file: b_val.h5
+verbose: 2

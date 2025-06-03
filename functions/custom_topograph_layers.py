@@ -27,7 +27,6 @@ class TopoGraphData:
 
     jets: tf.Tensor
     mask: tf.Tensor
-    nodes_w: tf.Tensor = None
     nodes_top: tf.Tensor = None
     previous_edges: List[tf.Tensor] = None
 
@@ -89,95 +88,6 @@ class ParticlePredictionMLPs(Layer):
 
         return tf.concat(outputs, axis=1)
 
-
-class InitializeHelperNodesW(Layer):
-    """
-    Initialize the helper nodes representing the W bosons from the jets.
-    """
-
-    def __init__(
-        self,
-        first_w_initialization: str,
-        second_w_initialization: str,
-        first_attention_architecture: Optional[dict] = None,
-        second_attention_architecture: Optional[dict] = None,
-        **kwargs,
-    ):
-        """
-        Initialize the helper nodes representing the W bosons from the jets.
-
-        Args
-        ----
-            first_w_initialization:
-                How the first helper node is initialized. All pooling opertaions are
-                allowed.
-            second_w_initialization:
-                How the second helper node is initialized. On top of all pooling
-                operations, 'opp' can be used which initializes the second node as the
-                first one multiplied with negative one.
-            first_attention_architecture:
-                If attention pooling is wanted for the first helper node, the
-                architecture of the attention network can be given here.
-            second_attention_architecture:
-                If attention pooling is wanted for the second helper node, the
-                architecture of the attention network can be given here.
-
-        """
-        super().__init__(**kwargs)
-        self.first_w_initialization = first_w_initialization
-        self.second_w_initialization = second_w_initialization
-
-        if self.first_w_initialization == "att":
-            self.first_attention_layer = AttentionLayer(first_attention_architecture)
-        self.first_pooling_layer = PoolingLayer(self.first_w_initialization)
-
-        if self.second_w_initialization == "att":
-            self.second_attention_layer = AttentionLayer(second_attention_architecture)
-        if self.second_w_initialization != "opp":
-            self.second_pooling_layer = PoolingLayer(self.second_w_initialization)
-
-    def call(self, inputs: tf.Tensor, mask: tf.Tensor) -> tf.Tensor:
-        """
-        Call the layer.
-
-        Args
-        ----
-            inputs:
-                Nodes/Jets to be pooled over to initialize the helper nodes.
-                Expected shape: (batch_size, n_nodes, n_features)
-            mask:
-                Mask for existing/non-existing nodes/jets.
-                Expected shape: (batch_size, n_nodes, 1)
-
-        Returns
-        -------
-            Initialized helper nodes.
-            Expected shape: (batch_size, 2, n_features)
-
-        """
-        if hasattr(self, "first_attention_layer"):
-            attention_weights = self.first_attention_layer(inputs, mask)
-            first_pooled_nodes = self.first_pooling_layer(
-                [inputs, attention_weights], mask
-            )
-        else:
-            first_pooled_nodes = self.first_pooling_layer(inputs, mask)
-
-        if hasattr(self, "second_attention_layer"):
-            attention_weights = self.second_attention_layer(inputs, mask)
-            second_pooled_nodes = self.second_pooling_layer(
-                [inputs, attention_weights], mask
-            )
-        elif hasattr(self, "second_pooling_layer"):
-            second_pooled_nodes = self.second_pooling_layer(inputs, mask)
-        else:
-            second_pooled_nodes = -first_pooled_nodes
-
-        return tf.concat(
-            [first_pooled_nodes[:, None, :], second_pooled_nodes[:, None, :]], axis=1
-        )
-
-
 class InitializeHelperNodesTopFixed(Layer):
     """
     Initialize the helper nodes representing the top bosons from the jets and the W
@@ -211,7 +121,14 @@ class InitializeHelperNodesTopFixed(Layer):
             self.first_attention_net = AttentionLayer(attention_net_architecture)
             self.second_attention_net = AttentionLayer(attention_net_architecture)
         # Pooling layers don't have parameters, so the same can be used for both tops
+        self.jets_pooling = jets_pooling
         self.jets_pooling_layer = PoolingLayer(jets_pooling)
+        
+        self.top_seed_net = FCDenseBlock(
+            {"units": [64, 32], "activation": "relu", "dropout": 0.1},
+            {"units": 32, "activation": "linear"}
+        )
+        
 
     def call(self, inputs: List[tf.Tensor], mask: tf.Tensor) -> tf.Tensor:
         """
@@ -247,12 +164,16 @@ class InitializeHelperNodesTopFixed(Layer):
         else:
             first_pooled_jets = self.jets_pooling_layer(inputs[0], mask)
             second_pooled_jets = self.jets_pooling_layer(inputs[0], mask)
-
-        first_top = tf.concat([first_pooled_jets, inputs[1][:, 0]], axis=-1)
-        second_top = tf.concat([second_pooled_jets, inputs[1][:, 1]], axis=-1)
+        
+        # Process the pooled representation to better represent a top quark
+        # that directly decays to 3 jets
+        first_top = self.top_seed_net(first_pooled_jets)
+        second_top = self.top_seed_net(second_pooled_jets)
+        #first_top = tf.concat([first_pooled_jets], axis=-1) #, inputs[1][:, 0]]
+        #second_top = tf.concat([second_pooled_jets], axis=-1) #, inputs[1][:, 1]]
 
         return tf.concat([first_top[:, None, :], second_top[:, None, :]], axis=1)
-
+       
 
 class EdgeClassification(Layer):
     """
@@ -268,6 +189,8 @@ class EdgeClassification(Layer):
             classification_net:
                 Architecture of the network to classify the edges. A final layer with
                 one output and a sigmoid activation is added at the end.
+            n_jets_per_top:
+                Number of jets per top quark (default: 3)
 
         """
         super().__init__(**kwargs)
@@ -310,6 +233,7 @@ class EdgeClassification(Layer):
 
         edge_scores = self.classification_net(edges_jet_particle)
         edge_scores = expand_edges_with_mask(edge_scores, mask_jet_particle)
+        
 
         return edge_scores
 
@@ -346,14 +270,8 @@ class TopoGraphBlock(Layer):
         """
         super().__init__(**kwargs)
         self.topo_graph_layer = TopoGraphLayer(**topo_graph_layer_kwargs)
-        self.classification_w_layer = EdgeClassification(
-            classification_net=classification_net
-        )
         self.classification_top_layer = EdgeClassification(
             classification_net=classification_net
-        )
-        self.regression_w_layer = ParticlePredictionMLPs(
-            architecture=regression_net, n_particles=2
         )
         self.regression_top_layer = ParticlePredictionMLPs(
             architecture=regression_net, n_particles=2
@@ -361,46 +279,35 @@ class TopoGraphBlock(Layer):
 
     def call(
         self, data: TopoGraphData
-    ) -> Tuple[TopoGraphData, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
+    ) -> Tuple[TopoGraphData, tf.Tensor, tf.Tensor]:
         """
         Call the layer
 
         Args
         ----
             data:
-                TopoGraphData holding the jet nodes, W nodes, top nodes, mask for
+                TopoGraphData holding the jet nodes, top nodes, mask for
                 existing/non-existing jets, and potentially previous edge features.
 
         Returns
         -------
             data:
                 Updated TopographData. Will update everything apart from the mask.
-            regression_w:
-                Regression results for the two W nodes.
-                Expected shape: (batch_size, 2, n_regression_features)
             regression_top:
                 Regression results for the two top nodes.
                 Expected shape: (batch_size, 2, n_regression_features)
-            classification_w:
-                Edge classification results for the two W nodes.
-                Expected shape: (batch_size, n_jets, 2, 1)
             classification_top:
                 Edge classification results for the two top nodes.
                 Expected shape: (batch_size, n_jets, 2, 1)
 
         """
         data = self.topo_graph_layer(data)
-        regression_w = self.regression_w_layer(data.nodes_w)
         regression_top = self.regression_top_layer(data.nodes_top)
-        classification_w = self.classification_w_layer(
-            [data.jets, data.nodes_w], data.mask
-        )
-
         classification_top = self.classification_top_layer(
             [data.jets, data.nodes_top], data.mask
         )
 
-        return data, regression_w, regression_top, classification_w, classification_top
+        return data, regression_top, classification_top
 
 
 class TopoGraphLayer(Layer):
@@ -415,10 +322,7 @@ class TopoGraphLayer(Layer):
         pooling: str = "avg",
         attention_net_architecture: Optional[dict] = None,
         full_connections_jets: bool = False,
-        full_connections_ws: bool = False,
         full_connections_tops: bool = False,
-        full_connections_w_top: bool = False,
-        w_w_interaction: bool = False,
         top_top_interaction: bool = False,
         **kwargs,
     ):
@@ -444,20 +348,15 @@ class TopoGraphLayer(Layer):
                 of edge. All attention networks have the same HPs.
             full_connection_jets:
                 Connect all jets with each other, including self connections.
-            full_connections_ws:
-                Connect all Ws with each other, including self connections.
             full_connections_tops:
                 Connect all Tops with each other, including self connections.
-            full_connections_w_top:
-                Connect all Ws with all Tops. Otherwise only the first W node will
-                interact with the first Top node and the second with the second.
-            w_w_interaction:
-                Let the two W nodes interact with each other.
             top_top_interaction:
                 Let the two Top nodes interact with each other.
 
         """
         super().__init__(**kwargs)
+
+        # TODO: Might need to modify this
 
         self.jet_jet_block = EdgeBlock(
             dense_edges=edge_net_architecture,
@@ -466,12 +365,7 @@ class TopoGraphLayer(Layer):
             k_neighbours=15,
             fully_connected=full_connections_jets,
         )
-        self.jet_w_block = EdgeBlock(
-            dense_edges=edge_net_architecture,
-            pooling_edges=pooling,
-            attention_network=attention_net_architecture,
-            fully_connected=True,
-        )
+        
         self.jet_top_block = EdgeBlock(
             dense_edges=edge_net_architecture,
             pooling_edges=pooling,
@@ -481,44 +375,13 @@ class TopoGraphLayer(Layer):
 
         self.dense_jets = FCDenseBlock(node_net_architecture)
 
-        self.w_jet_block = EdgeBlock(
-            dense_edges=edge_net_architecture,
-            pooling_edges=pooling,
-            attention_network=attention_net_architecture,
-            fully_connected=True,
-        )
-
-        if w_w_interaction:
-            self.w_w_block = EdgeBlock(
-                dense_edges=edge_net_architecture,
-                pooling_edges="avg",
-                attention_network=None,
-                k_neighbours=1,
-                fully_connected=full_connections_ws,
-            )
-        self.w_top_block = EdgeBlock(
-            dense_edges=edge_net_architecture,
-            pooling_edges="avg",
-            attention_network=None,
-            single_connection=not full_connections_w_top,
-            fully_connected=full_connections_w_top,
-        )
-
-        self.dense_ws = FCDenseBlock(node_net_architecture)
-
         self.top_jet_block = EdgeBlock(
             dense_edges=edge_net_architecture,
             pooling_edges=pooling,
             attention_network=attention_net_architecture,
             fully_connected=True,
         )
-        self.top_w_block = EdgeBlock(
-            dense_edges=edge_net_architecture,
-            pooling_edges="avg",
-            attention_network=None,
-            single_connection=not full_connections_w_top,
-            fully_connected=full_connections_w_top,
-        )
+        
         if top_top_interaction:
             self.top_top_block = EdgeBlock(
                 dense_edges=edge_net_architecture,
@@ -547,76 +410,45 @@ class TopoGraphLayer(Layer):
 
         """
         updated_data = TopoGraphData(
-            jets=None, mask=data.mask, previous_edges=[None] * 9
+            jets=None, mask=data.mask, previous_edges=[None] * 4
         )
 
         (pooled_jet_jet_edges, updated_data.previous_edges[0],) = self.jet_jet_block(
             data.jets, data.jets, data.mask, data.mask, data.previous_edges[0]
         )
-        pooled_jet_w_edges, updated_data.previous_edges[1] = self.jet_w_block(
-            data.jets, data.nodes_w, data.mask, None, data.previous_edges[1]
-        )
-        (pooled_jet_top_edges, updated_data.previous_edges[2],) = self.jet_top_block(
-            data.jets, data.nodes_top, data.mask, None, data.previous_edges[2]
+    
+        (pooled_jet_top_edges, updated_data.previous_edges[1],) = self.jet_top_block(
+            data.jets, data.nodes_top, data.mask, None, data.previous_edges[1]
         )
 
         updated_jets = tf.concat(
-            [data.jets, pooled_jet_jet_edges, pooled_jet_w_edges, pooled_jet_top_edges],
+            [data.jets, pooled_jet_jet_edges, pooled_jet_top_edges],
             axis=-1,
         )
         updated_data.jets = pass_with_mask(updated_jets, self.dense_jets, data.mask)
 
-        pooled_w_jet_edges, updated_data.previous_edges[3] = self.w_jet_block(
-            data.nodes_w, data.jets, None, data.mask, data.previous_edges[3]
+        (pooled_top_jet_edges, updated_data.previous_edges[2],) = self.top_jet_block(
+            data.nodes_top, data.jets, None, data.mask, data.previous_edges[2]
         )
-        pooled_w_top_edges, updated_data.previous_edges[5] = self.w_top_block(
-            data.nodes_w, data.nodes_top, None, None, data.previous_edges[5]
-        )
-        if hasattr(self, "w_w_block"):
-            pooled_w_w_edges, updated_data.previous_edges[4] = self.w_w_block(
-                data.nodes_w, data.nodes_w, None, None, data.previous_edges[4]
-            )
-            updated_ws = tf.concat(
-                [
-                    data.nodes_w,
-                    pooled_w_jet_edges,
-                    pooled_w_w_edges,
-                    pooled_w_top_edges,
-                ],
-                axis=-1,
-            )
-        else:
-            updated_ws = tf.concat(
-                [data.nodes_w, pooled_w_jet_edges, pooled_w_top_edges], axis=-1
-            )
-
-        updated_data.nodes_w = self.dense_ws(updated_ws)
-
-        (pooled_top_jet_edges, updated_data.previous_edges[6],) = self.top_jet_block(
-            data.nodes_top, data.jets, None, data.mask, data.previous_edges[6]
-        )
-        pooled_top_w_edges, updated_data.previous_edges[7] = self.top_w_block(
-            data.nodes_top, data.nodes_w, None, None, data.previous_edges[7]
-        )
+        
         if hasattr(self, "top_top_block"):
             (
                 pooled_top_top_edges,
-                updated_data.previous_edges[8],
+                updated_data.previous_edges[3],
             ) = self.top_top_block(
-                data.nodes_top, data.nodes_top, None, None, data.previous_edges[8]
+                data.nodes_top, data.nodes_top, None, None, data.previous_edges[3]
             )
             updated_tops = tf.concat(
                 [
                     data.nodes_top,
                     pooled_top_jet_edges,
-                    pooled_top_w_edges,
                     pooled_top_top_edges,
                 ],
                 axis=-1,
             )
         else:
             updated_tops = tf.concat(
-                [data.nodes_top, pooled_top_jet_edges, pooled_top_w_edges], axis=-1
+                [data.nodes_top, pooled_top_jet_edges], axis=-1 #, pooled_top_w_edges
             )
         updated_data.nodes_top = self.dense_tops(updated_tops)
 

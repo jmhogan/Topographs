@@ -406,6 +406,10 @@ class Particles:
         # If a scaler is provided use this one. E.g. using a scaler fitted on the train
         # set and apply it to the val set
         else:
+            # TODO: This is what we want to do with Ethan's output
+            # Check shape of self.momentum
+            #print("Shape: ", self.momentum.shape)
+            #print("Type: ", self.momentum.type)
             self.momentum = self.scaler.transform(self.momentum)
 
         self.status.preprocessed = True
@@ -440,6 +444,10 @@ class Particles:
             return
 
         joblib.dump(self.scaler, filename)
+        #joblib.load is the reverse
+        # try scaler for tops
+        # out tops output
+        # gen for vlq particles
 
     def set_scaler(self, scaler: Union[str, CustomStandardScaler, Path]) -> None:
         """
@@ -552,7 +560,6 @@ class Dataset:
     def __init__(
         self,
         jets: Particles = None,
-        w_partons: Particles = None,
         top_partons: Particles = None,
         jet_indices: np.ndarray = None,
         n_jets: np.ndarray = None,
@@ -560,35 +567,29 @@ class Dataset:
         matchability: np.ndarray = None,
     ):
         self.jets = jets
-        self.w_partons = w_partons
         self.top_partons = top_partons
         self.jet_indices = jet_indices
         self.n_jets = n_jets
         self.n_b_jets = n_b_jets
         self.matchability = matchability
-
+                
         self.parton_mask = None
-        self.true_edges_w = None
         self.true_edges_top = None
-
+ 
     def calc_parton_mask(self) -> None:
         """
-        Get a mask which defines which partons are reconstructable.
+        Get a mask defining reconstructable top and antitop quarks.
+        Bits 3–5: top quark (jet assignments for top decay products).
+        Bits 0–2: antitop quark (jet assignments for antitop decay products).
         """
-        self.parton_mask = np.zeros(shape=(self.matchability.shape[0], 4))
-        self.parton_mask[:, 0] = (self.matchability >> 3 & 1) & (
-            self.matchability >> 4 & 1
-        )
-        self.parton_mask[:, 1] = (self.parton_mask[:, 0] == 1) & (
-            self.matchability >> 5 & 1
-        )
-        self.parton_mask[:, 2] = (self.matchability >> 0 & 1) & (
-            self.matchability >> 1 & 1
-        )
-        self.parton_mask[:, 3] = (self.parton_mask[:, 2] == 1) & (
-            self.matchability >> 2 & 1
-        )
+        if self.matchability is None:
+            raise ValueError("Matchability array is not initialized")
+        self.parton_mask = np.zeros(shape=(self.matchability.shape[0], 2))
+        self.parton_mask[:, 0] = (self.matchability >> 3 & 1) & (self.matchability >> 4 & 1) & (self.matchability >> 5 & 1)  # Top
+        self.parton_mask[:, 1] = (self.matchability >> 0 & 1) & (self.matchability >> 1 & 1) & (self.matchability >> 2 & 1)  # Antitop
+        assert self.parton_mask.shape[1] == 2, f"Expected parton_mask shape (*, 2), got {self.parton_mask.shape}"
 
+        
     def mask_fully_impossible_events(self):
         """
         Mask events for training on partial events. Events which have no parton, i.e.
@@ -599,7 +600,6 @@ class Dataset:
         mask = np.sum(self.parton_mask, axis=-1) >= 1
 
         self.jets.mask(mask == 1)
-        self.w_partons.mask(mask == 1)
         self.top_partons.mask(mask == 1)
         self.jet_indices = self.jet_indices[mask == 1]
         self.n_jets = self.n_jets[mask == 1]
@@ -607,39 +607,8 @@ class Dataset:
         self.matchability = self.matchability[mask == 1]
 
         self.parton_mask = self.parton_mask[mask == 1]
-        if self.true_edges_w is not None:
-            self.true_edges_w = self.true_edges_w[mask == 1]
         if self.true_edges_top is not None:
             self.true_edges_top = self.true_edges_top[mask == 1]
-
-    def calc_truth_edges(self) -> None:
-        """
-        Get the true edges of both the Ws and the tops.
-        """
-        self.calc_truth_edges_w()
-        self.calc_truth_edges_top()
-
-    def calc_truth_edges_w(self) -> None:
-        """
-        Get the true edges of the Ws.
-        """
-        if self.jet_indices is None:
-            raise ValueError("No jet indices to calculate truth edges")
-
-        true_wplus_edges = (self.jet_indices == 1) | (self.jet_indices == 2)
-        true_wminus_edges = (self.jet_indices == 4) | (self.jet_indices == 5)
-
-        self.true_edges_w = (
-            np.concatenate(
-                [
-                    true_wplus_edges.reshape(-1, self.jet_indices.shape[1], 1),
-                    true_wminus_edges.reshape(-1, self.jet_indices.shape[1], 1),
-                ],
-                axis=-1,
-            )
-            .reshape((-1, self.jet_indices.shape[1], 2, 1))
-            .astype("float32")
-        )
 
     def calc_truth_edges_top(self) -> None:
         """
@@ -648,8 +617,8 @@ class Dataset:
         if self.jet_indices is None:
             raise ValueError("No jet indices to calculate truth edges")
 
-        true_top_edges = self.jet_indices == 0
-        true_antitop_edges = self.jet_indices == 3
+        true_top_edges = (self.jet_indices == 0) | (self.jet_indices == 1) | (self.jet_indices == 2)
+        true_antitop_edges = (self.jet_indices == 3) | (self.jet_indices == 4) | (self.jet_indices == 5)
 
         self.true_edges_top = (
             np.concatenate(
@@ -668,7 +637,6 @@ class Dataset:
         log_dir: Path,
         same_scaler_everything: bool = False,
         jet_scaler: Optional[CustomStandardScaler] = None,
-        w_scaler: Optional[CustomStandardScaler] = None,
         top_scaler: Optional[CustomStandardScaler] = None,
     ) -> None:
         """
@@ -683,10 +651,7 @@ class Dataset:
                 self.jets.preprocess_fit(True, log_dir / "scaler.Jets")
 
             particle_scaler = self.jets.scaler.copy_reduced_scaler()
-            self.w_partons.preprocess_transform(True, particle_scaler)
             self.top_partons.preprocess_transform(True, particle_scaler)
-            if w_scaler is None:
-                self.w_partons.dump_scaler(log_dir / "scaler.Ws")
             if top_scaler is None:
                 self.top_partons.dump_scaler(log_dir / "scaler.Tops")
         else:
@@ -694,11 +659,6 @@ class Dataset:
                 self.jets.preprocess_transform(True, jet_scaler)
             else:
                 self.jets.preprocess_fit(True, log_dir / "scaler.Jets")
-
-            if w_scaler is not None:
-                self.w_partons.preprocess_transform(True, w_scaler)
-            else:
-                self.w_partons.preprocess_fit(True, log_dir / "scaler.Ws")
 
             if top_scaler is not None:
                 self.top_partons.preprocess_transform(True, top_scaler)

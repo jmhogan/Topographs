@@ -14,6 +14,7 @@ from tensorflow.keras.layers import (
     LayerNormalization,
 )
 from tensorflow.keras.regularizers import l2
+from tensorflow.keras import regularizers
 
 
 class DenseLayer(Layer):
@@ -51,14 +52,20 @@ class DenseLayer(Layer):
 
         """
         super().__init__(**kwargs)
-        self.dense_layer = Dense(**dense_kwargs)
+        self.dense_layer = Dense(**dense_kwargs) #, kernel_regularizer=regularizers.l2(0.001)
         self.activation_layer = get_activation(activation)
         if dropout_kwargs is not None:
             self.dropout_layer = Dropout(**dropout_kwargs)
-        if normalisation.lower() == "batch":
-            self.normalisation_layer = BatchNormalization()
-        elif normalisation.lower() == "layer":
-            self.normalisation_layer = LayerNormalization()
+        if normalisation and isinstance(normalisation, str) and normalisation.lower() == "batch":
+            self.normalisation = tf.keras.layers.BatchNormalization()
+        elif normalisation and isinstance(normalisation, str) and normalisation.lower() == "layer":
+            self.normalisation = tf.keras.layers.LayerNormalization()
+        else:
+            self.normalisation = None
+        #if normalisation.lower() == "batch":
+        #    self.normalisation_layer = BatchNormalization()
+        #elif normalisation.lower() == "layer":
+        #    self.normalisation_layer = LayerNormalization()
 
     def call(self, tns):
         """
@@ -167,6 +174,7 @@ class FCDenseBlock(Layer):
             self.output_layer = Dense(
                 additional_output_layer["units"],
                 activation=additional_output_layer["activation"],
+                kernel_regularizer=regularizers.l2(0.001),
             )
 
     def call(self, tns: tf.Tensor) -> tf.Tensor:

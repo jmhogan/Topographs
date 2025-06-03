@@ -107,7 +107,7 @@ def load_and_mask_data(
     data_file: str,
     jet_indices: bool = False,
     jets: bool = False,
-    partons_w: bool = False,
+    #partons_w: bool = False,
     partons_top: bool = False,
     min_n_jets: int = 0,
     min_n_b_jets: int = 0,
@@ -193,19 +193,16 @@ def load_and_mask_data(
             smear = np.clip(smear, a_min=0, a_max=None)
             input_jets.momentum[..., -1] = input_jets.momentum[..., -1] * smear
 
-    # load the truth partons and for the moment return only the Ws
-    if partons_w:
-        w_partons, partons = load_partons(data_file, load_points, mask, 24, partons)
-
+    # load the truth partons
     if partons_top:
-        top_partons, partons = load_partons(data_file, load_points, mask, 6, partons)
-
+        top_partons, partons = load_partons(data_file, load_points, mask, 9000005, partons) #6
+        
     match = match[mask == 1]
     n_jets = n_jets[mask == 1]
     n_b_jets = n_b_jets[mask == 1]
+
     dataset = Dataset(
         jets=input_jets if jets else None,
-        w_partons=w_partons if partons_w else None,
         top_partons=top_partons if partons_top else None,
         jet_indices=jets_indices_h5 if jet_indices else None,
         n_jets=n_jets,

@@ -1,6 +1,6 @@
-train_file: "training.h5"
-val_file: "validation.h5"
-test_file: "testing.h5"
+train_file: "b_train.h5"
+val_file: "b_val.h5"
+test_file: "b_test.h5"
 matchability: false
 n_events: null
 same_scaler_everything: false
@@ -10,7 +10,6 @@ network_without_units: &network_without_units
   activation: gelu
   batch_norm: false
   dropout: 0
-  layer_norm: true
 
 
 graph_dense_net_units: &graph_dense_net_units
@@ -42,17 +41,6 @@ initial_graph_block:
   attention_network:
     <<: [*network_without_units, *attention_units]
 
-initialization_w:
-  first_w_initialization: att
-  first_attention_architecture:
-    <<: [*network_without_units, *attention_units]
-  second_w_initialization: att
-  second_attention_architecture:
-    <<: [*network_without_units, *attention_units]
-  regression_net:
-    <<: [*network_without_units, *regression_units]
-    out: 3
-
 initialization_top:
   jets_pooling: "att"
   attention_net_architecture:
@@ -62,7 +50,7 @@ initialization_top:
     out: 3
 
 Topograph:
-  n_iterations: 4
+  n_iterations: 2
   edge_net_architecture:
     <<: [*network_without_units, *graph_dense_net_units]
   node_net_architecture:
@@ -70,11 +58,8 @@ Topograph:
   pooling: "att"
   attention_net_architecture:
     <<: [*network_without_units, *attention_units]
-  full_connections_jets: false
-  full_connections_ws: false
-  full_connections_tops: false
-  full_connections_w_top: false
-  w_w_interaction: false
+  full_connections_jets: true # false
+  full_connections_tops: true # false 
   top_top_interaction: false
 
 persistent_edges: true
@@ -106,6 +91,6 @@ lr_schedule:
   name: "cosine"
   config:
     initial_learning_rate: 0.001
-    first_decay_steps: 2
+    first_decay_steps: 1 #2 gets rid of up and down
     m_mul: 1
     t_mul: 1

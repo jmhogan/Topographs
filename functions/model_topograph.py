@@ -9,13 +9,16 @@ from .custom_graph_layers import CreateMask, GraphBlock
 from .custom_losses import ClassificationLoss, RegressionLoss
 from .custom_topograph_layers import (
     InitializeHelperNodesTopFixed,
-    InitializeHelperNodesW,
     ParticlePredictionMLPs,
     TopoGraphBlock,
     TopoGraphData,
 )
 from .model_base import ModelBaseClass
 from .tools import Dataset
+
+# Modifications:
+#    Changing Indices (I hope those are right)
+#    Removed zip in calculate_regression_loss
 
 
 class TopographModel(ModelBaseClass):
@@ -34,6 +37,7 @@ class TopographModel(ModelBaseClass):
             **config["classification_loss"],
         )
         self.persistent_edges = config["persistent_edges"]
+        self.i = 0
 
     def _create_metrics(self) -> None:
         """
@@ -73,25 +77,6 @@ class TopographModel(ModelBaseClass):
         ]
 
         ########################################################################
-        # W initialization block, Ws get initialized and a regression network
-        # for the initialized values is used
-        ########################################################################
-        initialization_w = config["initialization_w"]
-        self.initialize_w = InitializeHelperNodesW(
-            first_w_initialization=initialization_w["first_w_initialization"],
-            second_w_initialization=initialization_w["second_w_initialization"],
-            first_attention_architecture=initialization_w[
-                "first_attention_architecture"
-            ],
-            second_attention_architecture=initialization_w[
-                "second_attention_architecture"
-            ],
-        )
-        self.initial_w_regression = ParticlePredictionMLPs(
-            architecture=initialization_w["regression_net"], n_particles=2
-        )
-
-        ########################################################################
         # Top initialization block, tops get initialized and a regression network
         # for the initialized values is used
         ########################################################################
@@ -125,41 +110,44 @@ class TopographModel(ModelBaseClass):
 
         for layer in self.jet_graph_block:
             data.jets = layer(data.jets, data.mask)
-
-        data.nodes_w = self.initialize_w(data.jets, data.mask)
-        initialised_nodes_w = self.initial_w_regression(data.nodes_w)
-
-        data.nodes_top = self.initialize_top([data.jets, data.nodes_w], data.mask)
+        
+        data.nodes_top = self.initialize_top([data.jets], data.mask)
         initialised_nodes_top = self.initial_top_regression(data.nodes_top)
 
-        data.previous_edges = [None] * 9
+        data.previous_edges = [None] * 4 
         (
-            regression_loss_w,
             regression_loss_top,
-            classification_loss_w,
             classification_loss_top,
-        ) = ([], [], [], [])
+        ) = ([], [])
         for block in self.topo_blocks:
             (
                 data,
-                regression_w,
                 regression_top,
-                classification_w,
                 classification_top,
             ) = block(data)
-            regression_loss_w.append(regression_w)
             regression_loss_top.append(regression_top)
-            classification_loss_w.append(classification_w)
             classification_loss_top.append(classification_top)
             if not self.persistent_edges:
-                data.previous_edges = [None] * 9
-
+                data.previous_edges = [None] * 4 
+        
+        file = open(f"inputs[1].txt", "w+")
+        content = str(inputs[1])
+        file.write(content)
+        file.close()
+        
+        file = open(f"datamask.txt", "w+")
+        content = str(data.mask)
+        file.write(content)
+        file.close()
+        
+        file = open(f"jetsmask.txt", "w+")
+        content = str(data.jets)
+        file.write(content)
+        file.close()
+        
         return (
-            initialised_nodes_w,
             initialised_nodes_top,
-            regression_loss_w,
             regression_loss_top,
-            classification_loss_w,
             classification_loss_top,
             data.mask,
             inputs[1],
@@ -180,8 +168,6 @@ class TopographModel(ModelBaseClass):
         )
         train_y = tf.data.Dataset.from_tensor_slices(
             (
-                train_dataset.true_edges_w,
-                train_dataset.w_partons.momentum,
                 train_dataset.true_edges_top,
                 train_dataset.top_partons.momentum,
             )
@@ -191,8 +177,6 @@ class TopographModel(ModelBaseClass):
         )
         val_y = tf.data.Dataset.from_tensor_slices(
             (
-                val_dataset.true_edges_w,
-                val_dataset.w_partons.momentum,
                 val_dataset.true_edges_top,
                 val_dataset.top_partons.momentum,
             )
@@ -217,14 +201,14 @@ class TopographModel(ModelBaseClass):
         regression losses.
         """
         initialization_loss = self.regression_loss.calculate(
-            y_true[1], y_pred[0], y_true[3], y_pred[1], parton_mask
+            y_true[1], y_pred[0], parton_mask 
         )[0]
-
+        
         regression_losses = []
-        for (preds_w, preds_top) in zip(y_pred[2], y_pred[3]):
+        for (preds_top) in y_pred[1]: 
             regression_losses.append(
                 self.regression_loss.calculate(
-                    y_true[1], preds_w, y_true[3], preds_top, parton_mask
+                    y_true[1], preds_top, parton_mask
                 )[0]
             )
 
@@ -243,10 +227,10 @@ class TopographModel(ModelBaseClass):
         """
         classification_losses = []
 
-        for (preds_w, preds_top) in zip(y_pred[4], y_pred[5]):
+        for (preds_top) in y_pred[2]:
             classification_losses.append(
                 self.classification_loss.calculate(
-                    y_true[0], preds_w, y_true[2], preds_top, mask, parton_mask
+                    y_true[0], preds_top, mask, parton_mask
                 )
             )
         classification_losses[-1] = classification_losses[-1]
@@ -265,7 +249,6 @@ class TopographModel(ModelBaseClass):
         """
         mask = mask[..., None]
         parton_mask = tf.expand_dims(parton_mask, -1)
-
         regression_losses = self.calculate_regression_loss(y_true, y_pred, parton_mask)
         classification_losses = self.calculate_classification_loss(
             y_true, y_pred, mask, parton_mask
@@ -281,18 +264,19 @@ class TopographModel(ModelBaseClass):
         """
         Update the state of all regression metrics.
         """
+
         self.metric_initialisation.update_state(
             self.regression_loss.calculate(
-                y_true[1], y_pred[0], y_true[3], y_pred[1], parton_mask
+                y_true[1], y_pred[0], parton_mask 
             )[0]
         )
 
-        for (metric, preds_w, preds_top) in zip(
-            self.metric_regression, y_pred[2], y_pred[3]
+        for (metric, preds_top) in zip( 
+            self.metric_regression, y_pred[1] 
         ):
             metric.update_state(
                 self.regression_loss.calculate(
-                    y_true[1], preds_w, y_true[3], preds_top, parton_mask
+                    y_true[1], preds_top, parton_mask 
                 )[0]
             )
 
@@ -306,12 +290,12 @@ class TopographModel(ModelBaseClass):
         """
         Update the state of all classification metrics.
         """
-        for (metric, preds_w, preds_top) in zip(
-            self.metric_classification, y_pred[4], y_pred[5]
+        for (metric, preds_top) in zip( 
+            self.metric_classification, y_pred[2] 
         ):
             metric.update_state(
                 self.classification_loss.calculate(
-                    y_true[0], preds_w, y_true[2], preds_top, mask, parton_mask
+                    y_true[0], preds_top, mask, parton_mask 
                 )
             )
 
@@ -327,6 +311,17 @@ class TopographModel(ModelBaseClass):
         """
         mask = mask[..., None]
         parton_mask = tf.expand_dims(parton_mask, -1)
+        
+        file = open(f"parton_mask.txt", "w+")
+        content = str(parton_mask)
+        file.write(content)
+        file.close()
+        
+        file = open(f"maskMetrics.txt", "w+")
+        content = str(mask)
+        file.write(content)
+        file.close()
+        
         self.calculate_regression_metrics(y_true, y_pred, parton_mask)
 
         self.calculate_classification_metrics(y_true, y_pred, mask, parton_mask)

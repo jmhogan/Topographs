@@ -1,8 +1,23 @@
 """Train a model with W and top nodes including classification of edges """
 from pathlib import Path
 
+# To Run the Topograph
+#
+# Start by cmsenv in CMSSW_13_2_10
+# Then, set up the environment with the closest variables using the command below
+# source /cvmfs/sft.cern.ch/lcg/views/LCG_103_LHCB_7/x86_64-centos7-clang12-opt/setup.sh
+# tensorflow 2.8.0 (2.10 not an option)
+#
+# Then run fully or partially with the command below
+# python3 train.py configs/config_full.yaml Outputs --test
+# python3 train.py configs/config_partial.yaml Outputs --test
+# python3 train.py configs/config_full.yaml Outputs --test_file
+# python3 train.py configs/config_partial.yaml Outputs --test_file b_test.h5 --all
+
 import joblib
 import numpy as np
+import os
+import shutil
 from functions.functions import get_best_model_weights, load_and_mask_data
 from functions.model_topograph import TopographModel
 from functions.tools import Configuration, CustomParser
@@ -56,13 +71,12 @@ def train(config):
         "min_n_jets": 6,
         "max_n_jets": 16,
         "n_events": config["n_events"],
-        "partons_w": True,
         "partons_top": True,
     }
     train_dataset = load_and_mask_data(
         config["train_file"], matchability=config["matchability"], **kwargs
     )
-    train_dataset.calc_truth_edges()
+    train_dataset.calc_truth_edges_top()
     train_dataset.calc_parton_mask()
     if config["matchability"] is False:
         train_dataset.mask_fully_impossible_events()
@@ -73,7 +87,7 @@ def train(config):
     val_dataset = load_and_mask_data(
         config["val_file"], matchability=config["matchability"], **kwargs
     )
-    val_dataset.calc_truth_edges()
+    val_dataset.calc_truth_edges_top()
     val_dataset.calc_parton_mask()
     if config["matchability"] is False:
         val_dataset.mask_fully_impossible_events()
@@ -81,15 +95,14 @@ def train(config):
         config["log_dir"],
         same_scaler_everything=config["same_scaler_everything"],
         jet_scaler=train_dataset.jets.scaler,
-        w_scaler=train_dataset.w_partons.scaler,
         top_scaler=train_dataset.top_partons.scaler,
     )
-
+    
     model = TopographModel(config)
     model.build(
         [
-            (2,) + train_dataset.jets.input_shape(config["use_flavour_tagging"])[1:],
-            (2, 4),
+            (1,) + train_dataset.jets.input_shape(config["use_flavour_tagging"])[1:],
+            (1, 4),
         ]
     )
     print(model.summary())
@@ -105,6 +118,8 @@ def main():
     """
     args = get_parser()
     log_dir = Path(args.log_dir)
+    if os.path.exists(args.log_dir):
+        shutil.rmtree(args.log_dir)
     log_dir.mkdir(exist_ok=True)
     config_loader = Configuration(args.config_file)
     config_loader.replace_with_command_line_arguments(args)
@@ -131,8 +146,8 @@ def main():
     test_dataset.jets.preprocess_transform(True, jet_scaler)
     model.build(
         [
-            (2,) + test_dataset.jets.input_shape(config["use_flavour_tagging"])[1:],
-            (2, 4),
+            (1,) + test_dataset.jets.input_shape(config["use_flavour_tagging"])[1:],
+            (1, 4),
         ]
     )
     model.load_weights(get_best_model_weights(config["log_dir"]))
@@ -146,20 +161,15 @@ def main():
         batch_size=config["batch_size"],
     )
 
-    np.save(log_dir / "preds_ws_initial.npy", preds[0])
-    np.save(log_dir / "preds_tops_initial.npy", preds[1])
-    for i, pred in enumerate(preds[2][:-1]):
-        np.save(log_dir / f"preds_ws_{i}.npy", pred)
-    for i, pred in enumerate(preds[3][:-1]):
+    np.save(log_dir / "preds_tops_initial.npy", preds[0]) #1
+    for i, pred in enumerate(preds[1][:-1]): # 3
         np.save(log_dir / f"preds_tops_{i}.npy", pred)
-    for i, pred in enumerate(preds[4][:-1]):
-        np.save(log_dir / f"preds_ws_edges_{i}.npy", pred)
-    for i, pred in enumerate(preds[5][:-1]):
+    for i, pred in enumerate(preds[2][:-1]): # 5
         np.save(log_dir / f"preds_tops_edges_{i}.npy", pred)
-    np.save(log_dir / "preds_ws.npy", preds[2][-1])
-    np.save(log_dir / "preds_tops.npy", preds[3][-1])
-    np.save(log_dir / "preds_edges_ws.npy", preds[4][-1])
-    np.save(log_dir / "preds_edges_tops.npy", preds[5][-1])
+    np.save(log_dir / "preds_tops.npy", preds[1][-1]) #3
+    np.save(log_dir / "preds_edges_tops.npy", preds[2][-1]) #5
+    np.save(log_dir / "preds_tops_3.npy", preds[3]) #5
+    np.save(log_dir / "preds_tops_4.npy", preds[4]) #5
 
     if args.all:
         test_dataset = load_and_mask_data(
@@ -179,20 +189,13 @@ def main():
             batch_size=config["batch_size"],
         )
 
-        np.save(log_dir / "preds_ws_initial_all.npy", preds[0])
         np.save(log_dir / "preds_tops_initial_all.npy", preds[1])
-        for i, pred in enumerate(preds[2][:-1]):
-            np.save(log_dir / f"preds_ws_{i}_all.npy", pred)
-        for i, pred in enumerate(preds[3][:-1]):
+        for i, pred in enumerate(preds[1][:-1]):
             np.save(log_dir / f"preds_tops_{i}_all.npy", pred)
-        for i, pred in enumerate(preds[4][:-1]):
-            np.save(log_dir / f"preds_ws_edges_{i}_all.npy", pred)
-        for i, pred in enumerate(preds[5][:-1]):
+        for i, pred in enumerate(preds[2][:-1]):
             np.save(log_dir / f"preds_tops_edges_{i}_all.npy", pred)
-        np.save(log_dir / "preds_ws_all.npy", preds[2][-1])
-        np.save(log_dir / "preds_tops_all.npy", preds[3][-1])
-        np.save(log_dir / "preds_edges_ws_all.npy", preds[4][-1])
-        np.save(log_dir / "preds_edges_tops_all.npy", preds[5][-1])
+        np.save(log_dir / "preds_tops_all.npy", preds[1][-1])
+        np.save(log_dir / "preds_edges_tops_all.npy", preds[2][-1])
 
 
 if __name__ == "__main__":

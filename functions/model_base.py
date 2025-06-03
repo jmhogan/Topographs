@@ -8,6 +8,8 @@ from typing import Tuple, Union
 
 import numpy as np
 import tensorflow as tf
+import os
+import csv
 
 
 class ModelBaseClass(tf.keras.Model):
@@ -68,16 +70,19 @@ class ModelBaseClass(tf.keras.Model):
 
         """
         x_train, y_train = data
+        
+        print("Train Step")
 
         with tf.GradientTape() as tape:
             y_pred = self(x_train, training=True)
             preds, mask, parton_mask = y_pred[:-1], y_pred[-2], y_pred[-1]
-            # Compute the loss value
+            
             loss = self.calculate_loss(y_train, preds, mask, parton_mask)
 
         # Compute gradients
         trainable_vars = self.trainable_variables
         gradients = tape.gradient(loss, trainable_vars)
+        
 
         # Update weights
         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
@@ -117,6 +122,7 @@ class ModelBaseClass(tf.keras.Model):
         # Compute predictions
         y_pred = self(x_test, training=False)
         preds, mask, parton_mask = y_pred[:-1], y_pred[-2], y_pred[-1]
+        print("Test Step")
         loss = self.calculate_loss(y_test, preds, mask, parton_mask)
 
         # Update the loss tracker
@@ -200,6 +206,7 @@ class ModelBaseClass(tf.keras.Model):
                 Total number of training steps taken so far in the training process.
 
         """
+        print("epoch_step")
         for data in dataset:
             results_dict = self.train_step(data) if train else self.test_step(data)
             if train:
@@ -236,6 +243,7 @@ class ModelBaseClass(tf.keras.Model):
 
         """
         results = ""
+        csv_log_path = "Outputs/training_log.csv"
         with summary_writer.as_default():
             if train:
                 tf.summary.scalar(
@@ -246,6 +254,21 @@ class ModelBaseClass(tf.keras.Model):
             for key, value in results_dict.items():
                 results += f"{key}: {value.numpy():.4f}, "
                 tf.summary.scalar(key, value, step=epoch + 1)
+                
+        # Write results to CSV
+        # Prepare a dict with all metric values as floats
+        row = {"epoch": epoch + 1, "mode": train}
+        for key, value in results_dict.items():
+            row[key] = float(value.numpy())
+
+        # Write header if file does not exist
+        file_exists = os.path.isfile(csv_log_path)
+        with open(csv_log_path, mode='a', newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=row.keys())
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(row)
+            
         print(results)
         self.reset_states()
 
@@ -276,7 +299,7 @@ class ModelBaseClass(tf.keras.Model):
         val_dataset = val_dataset.batch(self.config["batch_size"])
         n_batches = tf.data.experimental.cardinality(train_dataset)
 
-        self.optimizer = tf.keras.optimizers.experimental.AdamW()
+        self.optimizer = tf.keras.optimizers.Adam() #.experimental.AdamW
         self.get_lr_schedule(n_batches)
 
         with train_summary_writer.as_default():
@@ -291,7 +314,7 @@ class ModelBaseClass(tf.keras.Model):
 
         total_steps = 0
         for epoch in range(self.config["n_epochs"]):
-            if epoch - best_epoch > 20:
+            if epoch - best_epoch > 10:
                 print("Loss hasn't improved in ~20 epochs. Stopping training!")
                 break
 
@@ -330,7 +353,7 @@ class CyclicLRCustom(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(
         self,
         base_lr: float = 0.0001,
-        increase_lr: float = 50,
+        increase_lr: float = 5, #50
         n_epochs: int = 20,
         train_steps_per_epoch: int = 10000,
     ):
@@ -347,7 +370,7 @@ class CyclicLRCustom(tf.keras.optimizers.schedules.LearningRateSchedule):
         new_lr = self.base_lr + (
             (self.base_lr * self.increase_lr) - self.base_lr
         ) * tf.maximum(0, (1 - cycle_value))
-
+        tf.summary.scalar("learning_rate", new_lr, step=step)
         return new_lr
 
     def get_config(self) -> dict:
