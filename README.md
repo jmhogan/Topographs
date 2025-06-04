@@ -19,7 +19,7 @@ Alternatively you can use ```configs/config_partial.yaml``` to train including p
    * With the root files now obtained, use ```python3 fromRootToh5.py``` (in TIMBER) to change the root files to h5 files. In the ```fromRootToh5.py``` script, one must edit and write the name of the root files in the "List of filenames." Run the script, and obtain the three h5 files.
 2. Move the three h5 files into the Topograph folder. Set up the environment of Topograph with ```source /cvmfs/sft.cern.ch/lcg/views/LCG_103_LHCB_7/x86_64-centos7-clang12-opt/setup.sh```. This enironment uses the 2.8 version of tensor flow.
    * At this point, it will also be helpful to move the root files into Topograph, as they will be needed for step six.
-3. To run the Topograph, use ```train.py``` to produce the outputs. Use ```python3 train.py configs/config_partial.yaml Outputs --test_file b_test.h5 --all``` to move the output files into the ```Outputs``` folder.
+3. To run the Topograph, use ```train.py``` to produce the outputs. Use ```python3 train.py configs/config_partial.yaml Outputs --test_file b_test.h5 --all``` to run the script and move the output files into the ```Outputs``` folder.
 4. Next, run ```python3 plotModelPrints.py``` (in Topograph) to convert the .csv files to .png. The script produces four plots: Loss by Epoch, Initialisation by Epoch, Regression Losses by Epoch, and Classification Losses by Epoch.
 5. Using the root files from step two, edit and write the names of the root files in ```visualizeTopograph.py``` and run ```python3 visualizeTopograph.py```. The script produces a plot of the momentum.
 
